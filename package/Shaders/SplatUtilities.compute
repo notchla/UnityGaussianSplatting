@@ -16,6 +16,8 @@
 #pragma kernel CSScaleSelection
 #pragma kernel CSExportData
 #pragma kernel CSCopySplats
+#pragma kernel CSCalcDistancesExternal
+#pragma kernel CSCalcViewDataExternal
 
 // DeviceRadixSort
 #pragma multi_compile __ KEY_UINT KEY_INT KEY_FLOAT
@@ -755,4 +757,64 @@ void CSCopySplats (uint3 id : SV_DispatchThreadID)
         uint dstBitIdx = dstIdx & 31;
         _CopyDstEditDeleted.InterlockedOr(dstWordIdx * 4, 1u << dstBitIdx);
     }
+}
+
+[numthreads(GROUP_SIZE,1,1)]
+void CSCalcDistancesExternal (uint3 id : SV_DispatchThreadID)
+{
+    uint idx = id.x;
+    if (idx >= _SplatCount)
+        return;
+
+    uint origIdx = _SplatSortKeys[idx];
+    float3 pos = _ExtPos[origIdx];
+    pos = mul(_MatrixMV, float4(pos, 1)).xyz;
+
+    _SplatSortDistances[idx] = FloatToSortableUint(pos.z);
+}
+
+[numthreads(GROUP_SIZE,1,1)]
+void CSCalcViewDataExternal (uint3 id : SV_DispatchThreadID)
+{
+    uint idx = id.x;
+    if (idx >= _SplatCount)
+        return;
+
+    float3 pos = _ExtPos[idx];
+    float4 col = _ExtColor[idx];
+    float3 cov3d0 = _ExtCov3d0[idx];
+    float3 cov3d1 = _ExtCov3d1[idx];
+
+    SplatViewData view = (SplatViewData)0;
+
+    float3 centerWorldPos = mul(_MatrixObjectToWorld, float4(pos, 1)).xyz;
+    float4 centerClipPos = mul(UNITY_MATRIX_VP, float4(centerWorldPos, 1));
+    half opacityScale = _SplatOpacityScale;
+    float splatScale = _SplatScale;
+
+    // cutouts
+    if (_SplatCutoutsCount > 0 && IsSplatCut(pos))
+    {
+        centerClipPos.w = 0;
+    }
+
+    view.pos = centerClipPos;
+    bool behindCam = centerClipPos.w <= 0;
+    if (!behindCam)
+    {
+        float splatScale2 = splatScale * splatScale;
+        cov3d0 *= splatScale2;
+        cov3d1 *= splatScale2;
+        float3 cov2d = CalcCovariance2D(pos, cov3d0, cov3d1, _MatrixMV, UNITY_MATRIX_P, _VecScreenParams);
+
+        DecomposeCovariance(cov2d, view.axis1, view.axis2);
+
+        half4 c;
+        c.rgb = col.rgb;
+        c.a = min(col.a * opacityScale, 65000);
+        view.color.x = (f32tof16(c.r) << 16) | f32tof16(c.g);
+        view.color.y = (f32tof16(c.b) << 16) | f32tof16(c.a);
+    }
+
+    _SplatViewData[idx] = view;
 }

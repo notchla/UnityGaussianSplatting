@@ -316,6 +316,12 @@ SplatBufferDataType _SplatSH;
 Texture2D _SplatColor;
 uint _SplatFormat;
 
+// External buffer mode
+StructuredBuffer<float3> _ExtPos;
+StructuredBuffer<float4> _ExtColor;
+StructuredBuffer<float3> _ExtCov3d0; // xx, xy, xz
+StructuredBuffer<float3> _ExtCov3d1; // yy, yz, zz
+
 // Match GaussianSplatAsset.VectorFormat
 #define VECTOR_FMT_32F 0
 #define VECTOR_FMT_16 1
