@@ -24,6 +24,11 @@ namespace GaussianSplatting.Editor
         SerializedProperty m_PropRenderOrder;
         SerializedProperty m_PropSplatScale;
         SerializedProperty m_PropOpacityScale;
+        SerializedProperty m_PropEnableOpacityThreshold;
+        SerializedProperty m_PropOpacityThreshold;
+        SerializedProperty m_PropSparsityThreshold;
+        SerializedProperty m_PropVisibleSplatCount;
+        SerializedProperty m_PropTotalSplatCount;
         SerializedProperty m_PropSHOrder;
         SerializedProperty m_PropSHOnly;
         SerializedProperty m_PropSortNthFrame;
@@ -64,6 +69,11 @@ namespace GaussianSplatting.Editor
             m_PropRenderOrder = serializedObject.FindProperty("m_RenderOrder");
             m_PropSplatScale = serializedObject.FindProperty("m_SplatScale");
             m_PropOpacityScale = serializedObject.FindProperty("m_OpacityScale");
+            m_PropEnableOpacityThreshold = serializedObject.FindProperty("m_EnableOpacityThreshold");
+            m_PropOpacityThreshold = serializedObject.FindProperty("m_OpacityThreshold");
+            m_PropSparsityThreshold = serializedObject.FindProperty("m_SparsityThreshold");
+            m_PropVisibleSplatCount = serializedObject.FindProperty("m_VisibleSplatCount");
+            m_PropTotalSplatCount = serializedObject.FindProperty("m_TotalSplatCount");
             m_PropSHOrder = serializedObject.FindProperty("m_SHOrder");
             m_PropSHOnly = serializedObject.FindProperty("m_SHOnly");
             m_PropSortNthFrame = serializedObject.FindProperty("m_SortNthFrame");
@@ -108,6 +118,17 @@ namespace GaussianSplatting.Editor
             EditorGUILayout.PropertyField(m_PropRenderOrder);
             EditorGUILayout.PropertyField(m_PropSplatScale);
             EditorGUILayout.PropertyField(m_PropOpacityScale);
+            EditorGUILayout.PropertyField(m_PropEnableOpacityThreshold);
+            if (m_PropEnableOpacityThreshold.boolValue)
+            {
+                EditorGUILayout.PropertyField(m_PropOpacityThreshold);
+                EditorGUILayout.PropertyField(m_PropSparsityThreshold);
+                using (new EditorGUI.DisabledScope(true))
+                {
+                    EditorGUILayout.PropertyField(m_PropVisibleSplatCount);
+                    EditorGUILayout.PropertyField(m_PropTotalSplatCount);
+                }
+            }
             EditorGUILayout.PropertyField(m_PropSHOrder);
             EditorGUILayout.PropertyField(m_PropSHOnly);
             EditorGUILayout.PropertyField(m_PropSortNthFrame);

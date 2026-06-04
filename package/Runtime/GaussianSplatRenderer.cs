@@ -142,6 +142,9 @@ namespace GaussianSplatting.Runtime
                 mpb.SetBuffer(GaussianSplatRenderer.Props.OrderBuffer, gs.m_GpuSortKeys);
                 mpb.SetFloat(GaussianSplatRenderer.Props.SplatScale, gs.m_SplatScale);
                 mpb.SetFloat(GaussianSplatRenderer.Props.SplatOpacityScale, gs.m_OpacityScale);
+                mpb.SetInteger(GaussianSplatRenderer.Props.SplatOpacityThresholdEnabled, gs.m_EnableOpacityThreshold ? 1 : 0);
+                mpb.SetFloat(GaussianSplatRenderer.Props.SplatOpacityThreshold, gs.m_OpacityThreshold);
+                mpb.SetFloat(GaussianSplatRenderer.Props.SplatSparsityThreshold, gs.m_SparsityThreshold);
                 mpb.SetFloat(GaussianSplatRenderer.Props.SplatSize, gs.m_PointDisplaySize);
                 mpb.SetInteger(GaussianSplatRenderer.Props.SHOrder, gs.m_SHOrder);
                 mpb.SetInteger(GaussianSplatRenderer.Props.SHOnly, gs.m_SHOnly ? 1 : 0);
@@ -231,6 +234,17 @@ namespace GaussianSplatting.Runtime
         [Range(0.05f, 20.0f)]
         [Tooltip("Additional scaling factor for opacity")]
         public float m_OpacityScale = 1.0f;
+        [Tooltip("Cull low-opacity splats only when they belong to sparse chunks.")]
+        public bool m_EnableOpacityThreshold;
+        [Range(0f, 1f)]
+        [Tooltip("Splats below this opacity are candidates for sparse-chunk culling.")]
+        public float m_OpacityThreshold = 0.05f;
+        [Tooltip("Chunks whose largest object-space extent exceeds this value are considered sparse.")]
+        public float m_SparsityThreshold = 1.0f;
+        [SerializeField, Tooltip("Splats visible after opacity thresholding. -1 means unavailable for this data source.")]
+        int m_VisibleSplatCount = -1;
+        [SerializeField, Tooltip("Total splats before opacity thresholding.")]
+        int m_TotalSplatCount;
         [Range(0, 3)] [Tooltip("Spherical Harmonics order to use")]
         public int m_SHOrder = 3;
         [Tooltip("Show only Spherical Harmonics contribution, using gray color")]
@@ -286,6 +300,12 @@ namespace GaussianSplatting.Runtime
         GaussianSplatAsset m_PrevAsset;
         Hash128 m_PrevHash;
         bool m_Registered;
+        bool m_LastCountThresholdEnabled;
+        float m_LastCountOpacityThreshold = float.NaN;
+        float m_LastCountSparsityThreshold = float.NaN;
+        int m_LastCountSplatCount = -1;
+        GaussianSplatAsset m_LastCountAsset;
+        Hash128 m_LastCountAssetHash;
 
         static readonly ProfilerMarker s_ProfSort = new(ProfilerCategory.Render, "GaussianSplat.Sort", MarkerFlags.SampleGPU);
 
@@ -305,6 +325,9 @@ namespace GaussianSplatting.Runtime
             public static readonly int OrderBuffer = Shader.PropertyToID("_OrderBuffer");
             public static readonly int SplatScale = Shader.PropertyToID("_SplatScale");
             public static readonly int SplatOpacityScale = Shader.PropertyToID("_SplatOpacityScale");
+            public static readonly int SplatOpacityThresholdEnabled = Shader.PropertyToID("_SplatOpacityThresholdEnabled");
+            public static readonly int SplatOpacityThreshold = Shader.PropertyToID("_SplatOpacityThreshold");
+            public static readonly int SplatSparsityThreshold = Shader.PropertyToID("_SplatSparsityThreshold");
             public static readonly int SplatSize = Shader.PropertyToID("_SplatSize");
             public static readonly int SplatCount = Shader.PropertyToID("_SplatCount");
             public static readonly int SHOrder = Shader.PropertyToID("_SHOrder");
@@ -335,6 +358,7 @@ namespace GaussianSplatting.Runtime
             public static readonly int ExtColor = Shader.PropertyToID("_ExtColor");
             public static readonly int ExtCov3d0 = Shader.PropertyToID("_ExtCov3d0");
             public static readonly int ExtCov3d1 = Shader.PropertyToID("_ExtCov3d1");
+            public static readonly int ExtSH = Shader.PropertyToID("_ExtSH");
         }
 
         [field: NonSerialized] public bool editModified { get; private set; }
@@ -351,6 +375,7 @@ namespace GaussianSplatting.Runtime
         public GraphicsBuffer ExternalColorBuffer { get; set; }       // float4 per splat (stride 16)
         public GraphicsBuffer ExternalCovarianceBuffer0 { get; set; } // float3 per splat: xx, xy, xz
         public GraphicsBuffer ExternalCovarianceBuffer1 { get; set; } // float3 per splat: yy, yz, zz
+        public GraphicsBuffer ExternalSphericalHarmonicsBuffer { get; set; } // 15 float3 values per splat (stride 12)
         public int ExternalSplatCount { get; set; }
 
         public bool HasExternalBuffers =>
@@ -358,6 +383,7 @@ namespace GaussianSplatting.Runtime
             ExternalColorBuffer != null &&
             ExternalCovarianceBuffer0 != null &&
             ExternalCovarianceBuffer1 != null &&
+            ExternalSphericalHarmonicsBuffer != null &&
             ExternalSplatCount > 0;
 
         enum KernelIndices
@@ -477,12 +503,13 @@ namespace GaussianSplatting.Runtime
             InitSortBuffers(m_SplatCount);
         }
 
-        public void SetExternalBuffers(GraphicsBuffer posBuffer, GraphicsBuffer colorBuffer, GraphicsBuffer covBuffer0, GraphicsBuffer covBuffer1, int splatCount)
+        public void SetExternalBuffers(GraphicsBuffer posBuffer, GraphicsBuffer colorBuffer, GraphicsBuffer covBuffer0, GraphicsBuffer covBuffer1, GraphicsBuffer sphericalHarmonicsBuffer, int splatCount)
         {
             ExternalPositionBuffer = posBuffer;
             ExternalColorBuffer = colorBuffer;
             ExternalCovarianceBuffer0 = covBuffer0;
             ExternalCovarianceBuffer1 = covBuffer1;
+            ExternalSphericalHarmonicsBuffer = sphericalHarmonicsBuffer;
             ExternalSplatCount = splatCount;
 
             if (m_Registered)
@@ -581,6 +608,7 @@ namespace GaussianSplatting.Runtime
                 cmb.SetComputeBufferParam(cs, kernelIndex, Props.ExtColor, ExternalColorBuffer);
                 cmb.SetComputeBufferParam(cs, kernelIndex, Props.ExtCov3d0, ExternalCovarianceBuffer0);
                 cmb.SetComputeBufferParam(cs, kernelIndex, Props.ExtCov3d1, ExternalCovarianceBuffer1);
+                cmb.SetComputeBufferParam(cs, kernelIndex, Props.ExtSH, ExternalSphericalHarmonicsBuffer);
             }
             else
             {
@@ -746,8 +774,154 @@ namespace GaussianSplatting.Runtime
             cmd.EndSample(s_ProfSort);
         }
 
+        void RefreshOpacityThresholdStatsIfNeeded()
+        {
+            int count = m_UsingExternalBuffers ? ExternalSplatCount : (m_Asset ? m_Asset.splatCount : 0);
+            Hash128 assetHash = m_Asset ? m_Asset.dataHash : new Hash128();
+
+            if (m_LastCountThresholdEnabled == m_EnableOpacityThreshold &&
+                m_LastCountOpacityThreshold == m_OpacityThreshold &&
+                m_LastCountSparsityThreshold == m_SparsityThreshold &&
+                m_LastCountSplatCount == count &&
+                m_LastCountAsset == m_Asset &&
+                m_LastCountAssetHash.Equals(assetHash))
+                return;
+
+            RefreshOpacityThresholdStats();
+
+            m_LastCountThresholdEnabled = m_EnableOpacityThreshold;
+            m_LastCountOpacityThreshold = m_OpacityThreshold;
+            m_LastCountSparsityThreshold = m_SparsityThreshold;
+            m_LastCountSplatCount = count;
+            m_LastCountAsset = m_Asset;
+            m_LastCountAssetHash = assetHash;
+        }
+
+        void RefreshOpacityThresholdStats()
+        {
+            int count = m_UsingExternalBuffers ? ExternalSplatCount : (m_Asset ? m_Asset.splatCount : 0);
+            m_TotalSplatCount = count;
+
+            if (!m_EnableOpacityThreshold)
+            {
+                m_VisibleSplatCount = count;
+                return;
+            }
+
+            if (m_UsingExternalBuffers)
+            {
+                m_VisibleSplatCount = -1;
+                return;
+            }
+
+            if (!HasValidAsset)
+            {
+                m_VisibleSplatCount = 0;
+                return;
+            }
+
+            if (m_Asset.colorFormat == GaussianSplatAsset.ColorFormat.BC7)
+            {
+                m_VisibleSplatCount = -1;
+                return;
+            }
+
+            bool hasChunks = m_Asset.chunkData != null && m_Asset.chunkData.dataSize > 0;
+            NativeArray<GaussianSplatAsset.ChunkInfo> chunks = hasChunks
+                ? m_Asset.chunkData.GetData<GaussianSplatAsset.ChunkInfo>()
+                : default;
+            NativeArray<byte> colorBytes = m_Asset.colorData.GetData<byte>();
+
+            int visible = 0;
+            for (int i = 0; i < m_Asset.splatCount; i++)
+            {
+                bool sparse = true;
+                float colAMin = 0;
+                float colAMax = 1;
+
+                if (hasChunks && chunks.IsCreated)
+                {
+                    int chunkIndex = i / GaussianSplatAsset.kChunkSize;
+                    if (chunkIndex < chunks.Length)
+                    {
+                        GaussianSplatAsset.ChunkInfo chunk = chunks[chunkIndex];
+                        float3 extents = new float3(
+                            chunk.posX.y - chunk.posX.x,
+                            chunk.posY.y - chunk.posY.x,
+                            chunk.posZ.y - chunk.posZ.x);
+                        sparse = math.cmax(extents) > m_SparsityThreshold;
+                        colAMin = math.f16tof32(chunk.colA);
+                        colAMax = math.f16tof32(chunk.colA >> 16);
+                    }
+                }
+
+                if (!sparse)
+                {
+                    visible++;
+                    continue;
+                }
+
+                float opacity = DecodeSplatOpacity(colorBytes, i, m_Asset.colorFormat, hasChunks, colAMin, colAMax);
+                if (opacity >= m_OpacityThreshold)
+                    visible++;
+            }
+
+            m_VisibleSplatCount = visible;
+        }
+
+        static float DecodeSplatOpacity(NativeArray<byte> bytes, int splatIndex, GaussianSplatAsset.ColorFormat format, bool hasChunks, float colAMin, float colAMax)
+        {
+            int pixelIndex = SplatIndexToPixelIndex(splatIndex);
+            float rawAlpha;
+            switch (format)
+            {
+                case GaussianSplatAsset.ColorFormat.Norm8x4:
+                    rawAlpha = bytes[pixelIndex * 4 + 3] / 255.0f;
+                    break;
+                case GaussianSplatAsset.ColorFormat.Float16x4:
+                {
+                    int byteIndex = pixelIndex * 8 + 6;
+                    uint h = bytes[byteIndex] | ((uint)bytes[byteIndex + 1] << 8);
+                    rawAlpha = math.f16tof32(h);
+                    break;
+                }
+                case GaussianSplatAsset.ColorFormat.Float32x4:
+                {
+                    int byteIndex = pixelIndex * 16 + 12;
+                    uint bits =
+                        bytes[byteIndex] |
+                        ((uint)bytes[byteIndex + 1] << 8) |
+                        ((uint)bytes[byteIndex + 2] << 16) |
+                        ((uint)bytes[byteIndex + 3] << 24);
+                    rawAlpha = math.asfloat(bits);
+                    break;
+                }
+                default:
+                    return 1;
+            }
+
+            if (!hasChunks)
+                return rawAlpha;
+
+            float decoded = math.lerp(colAMin, colAMax, rawAlpha);
+            return GaussianUtils.InvSquareCentered01(decoded);
+        }
+
+        static int SplatIndexToPixelIndex(int splatIndex)
+        {
+            uint idx = (uint)splatIndex;
+            uint2 xy = GaussianUtils.DecodeMorton2D_16x16(idx);
+            uint blockIndex = idx >> 8;
+            uint blockWidth = GaussianSplatAsset.kTextureWidth / 16;
+            uint x = (blockIndex % blockWidth) * 16 + xy.x;
+            uint y = (blockIndex / blockWidth) * 16 + xy.y;
+            return (int)(y * GaussianSplatAsset.kTextureWidth + x);
+        }
+
         public void Update()
         {
+            RefreshOpacityThresholdStatsIfNeeded();
+
             if (m_UsingExternalBuffers)
                 return;
 

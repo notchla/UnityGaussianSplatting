@@ -31,15 +31,39 @@ struct v2f
 StructuredBuffer<SplatViewData> _SplatViewData;
 ByteAddressBuffer _SplatSelectedBits;
 uint _SplatBitsValid;
+uint _SplatOpacityThresholdEnabled;
+float _SplatOpacityThreshold;
+float _SplatSparsityThreshold;
 
 v2f vert (uint vtxID : SV_VertexID, uint instID : SV_InstanceID)
 {
     v2f o = (v2f)0;
-    instID = _OrderBuffer[instID];
+	instID = _OrderBuffer[instID];
 	SplatViewData view = _SplatViewData[instID];
 	float4 centerClipPos = view.pos;
+	float splatOpacity = f16tof32(view.color.y);
 	bool behindCam = centerClipPos.w <= 0;
-	if (behindCam)
+	bool rogue = false;
+
+	if (_SplatOpacityThresholdEnabled && splatOpacity < _SplatOpacityThreshold)
+	{
+		uint chunkIdx = instID / kChunkSize;
+		if (chunkIdx < _SplatChunkCount)
+		{
+			SplatChunkInfo chunk = _SplatChunks[chunkIdx];
+			float3 extents = float3(
+				chunk.posX.y - chunk.posX.x,
+				chunk.posY.y - chunk.posY.x,
+				chunk.posZ.y - chunk.posZ.x);
+			rogue = max(extents.x, max(extents.y, extents.z)) > _SplatSparsityThreshold;
+		}
+		else
+		{
+			rogue = true;
+		}
+	}
+
+	if (behindCam || rogue)
 	{
 		o.vertex = asfloat(0x7fc00000); // NaN discards the primitive
 	}
@@ -48,7 +72,7 @@ v2f vert (uint vtxID : SV_VertexID, uint instID : SV_InstanceID)
 		o.col.r = f16tof32(view.color.x >> 16);
 		o.col.g = f16tof32(view.color.x);
 		o.col.b = f16tof32(view.color.y >> 16);
-		o.col.a = f16tof32(view.color.y);
+		o.col.a = splatOpacity;
 
 		uint idx = vtxID;
 		float2 quadPos = float2(idx&1, (idx>>1)&1) * 2.0 - 1.0;
