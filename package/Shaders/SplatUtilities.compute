@@ -87,6 +87,7 @@ RWStructuredBuffer<SplatViewData> _SplatViewData;
 
 float _SplatScale;
 float _SplatOpacityScale;
+float _SplatOpacityThreshold;
 uint _SHOrder;
 uint _SHOnly;
 
@@ -220,6 +221,10 @@ void CSCalcViewData (uint3 id : SV_DispatchThreadID)
     {
         centerClipPos.w = 0;
     }
+
+    // opacity threshold
+    if (splat.opacity < _SplatOpacityThreshold)
+        centerClipPos.w = 0;
 
     view.pos = centerClipPos;
     bool behindCam = centerClipPos.w <= 0;
@@ -797,6 +802,10 @@ void CSCalcViewDataExternal (uint3 id : SV_DispatchThreadID)
     {
         centerClipPos.w = 0;
     }
+
+    // opacity threshold
+    if (col.a < _SplatOpacityThreshold)
+        centerClipPos.w = 0;
 
     view.pos = centerClipPos;
     bool behindCam = centerClipPos.w <= 0;
