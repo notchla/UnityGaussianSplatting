@@ -321,12 +321,38 @@ StructuredBuffer<float3> _ExtPos;
 StructuredBuffer<float4> _ExtColor;
 StructuredBuffer<float3> _ExtCov3d0; // xx, xy, xz
 StructuredBuffer<float3> _ExtCov3d1; // yy, yz, zz
+StructuredBuffer<float3> _ExtSH; // 15 SH float3 coefficients per splat
 
 // Match GaussianSplatAsset.VectorFormat
 #define VECTOR_FMT_32F 0
 #define VECTOR_FMT_16 1
 #define VECTOR_FMT_11 2
 #define VECTOR_FMT_6 3
+
+SplatSHData LoadExternalSH(uint idx, float3 baseColor)
+{
+    SplatSHData sh = (SplatSHData)0;
+    uint shIdx = idx * 15;
+
+    sh.col = baseColor;
+    sh.sh1 = _ExtSH[shIdx + 0];
+    sh.sh2 = _ExtSH[shIdx + 1];
+    sh.sh3 = _ExtSH[shIdx + 2];
+    sh.sh4 = _ExtSH[shIdx + 3];
+    sh.sh5 = _ExtSH[shIdx + 4];
+    sh.sh6 = _ExtSH[shIdx + 5];
+    sh.sh7 = _ExtSH[shIdx + 6];
+    sh.sh8 = _ExtSH[shIdx + 7];
+    sh.sh9 = _ExtSH[shIdx + 8];
+    sh.sh10 = _ExtSH[shIdx + 9];
+    sh.sh11 = _ExtSH[shIdx + 10];
+    sh.sh12 = _ExtSH[shIdx + 11];
+    sh.sh13 = _ExtSH[shIdx + 12];
+    sh.sh14 = _ExtSH[shIdx + 13];
+    sh.sh15 = _ExtSH[shIdx + 14];
+
+    return sh;
+}
 
 uint LoadUShort(SplatBufferDataType dataBuffer, uint addrU)
 {

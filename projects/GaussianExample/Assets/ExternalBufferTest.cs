@@ -25,6 +25,7 @@ public class ExternalBufferTest : MonoBehaviour
     GraphicsBuffer m_ColorBuffer;
     GraphicsBuffer m_Cov0Buffer;
     GraphicsBuffer m_Cov1Buffer;
+    GraphicsBuffer m_ShBuffer;
 
     // base positions (stable seed), animated positions written to GPU each frame
     Vector3[] m_BasePositions;
@@ -32,6 +33,9 @@ public class ExternalBufferTest : MonoBehaviour
     Vector4[] m_Colors;
     Vector3[] m_Cov0;
     Vector3[] m_Cov1;
+    Vector3[] m_SH; // 15 float3 SH coefficients per splat, static across frames
+
+    const int kShCoeffsPerSplat = 15;
 
     GaussianSplatRenderer m_Renderer;
 
@@ -40,7 +44,7 @@ public class ExternalBufferTest : MonoBehaviour
         m_Renderer = GetComponent<GaussianSplatRenderer>();
         CreateBuffers();
         UpdateBufferData();
-        m_Renderer.SetExternalBuffers(m_PosBuffer, m_ColorBuffer, m_Cov0Buffer, m_Cov1Buffer, splatCount);
+        m_Renderer.SetExternalBuffers(m_PosBuffer, m_ColorBuffer, m_Cov0Buffer, m_Cov1Buffer, m_ShBuffer, splatCount);
     }
 
     void OnDisable()
@@ -61,12 +65,14 @@ public class ExternalBufferTest : MonoBehaviour
         m_ColorBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, splatCount, 16);
         m_Cov0Buffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, splatCount, 12);
         m_Cov1Buffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, splatCount, 12);
+        m_ShBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, splatCount * kShCoeffsPerSplat, 12);
 
         m_BasePositions = new Vector3[splatCount];
         m_AnimPositions = new Vector3[splatCount];
         m_Colors = new Vector4[splatCount];
         m_Cov0 = new Vector3[splatCount];
         m_Cov1 = new Vector3[splatCount];
+        m_SH = new Vector3[splatCount * kShCoeffsPerSplat];
 
         // seed base positions using golden ratio sphere distribution + random radius
         float goldenAngle = Mathf.PI * (3f - Mathf.Sqrt(5f));
@@ -81,7 +87,17 @@ public class ExternalBufferTest : MonoBehaviour
                 r * Mathf.Sin(inclination) * Mathf.Sin(azimuth),
                 r * Mathf.Cos(inclination)
             );
+
+            // Static per-splat SH: leave all coefficients zero except the band-1 terms,
+            // which tint R/G/B along the view direction's y/z/x components so rotating the
+            // camera produces visible view-dependent color (exercises the external SH path).
+            int shBase = i * kShCoeffsPerSplat;
+            m_SH[shBase + 0] = new Vector3(0.4f, 0f, 0f);  // sh1 -> -y
+            m_SH[shBase + 1] = new Vector3(0f, 0.4f, 0f);  // sh2 -> +z
+            m_SH[shBase + 2] = new Vector3(0f, 0f, 0.4f);  // sh3 -> -x
         }
+
+        m_ShBuffer.SetData(m_SH);
     }
 
     void UpdateBufferData()
@@ -134,5 +150,7 @@ public class ExternalBufferTest : MonoBehaviour
         m_Cov0Buffer = null;
         m_Cov1Buffer?.Dispose();
         m_Cov1Buffer = null;
+        m_ShBuffer?.Dispose();
+        m_ShBuffer = null;
     }
 }

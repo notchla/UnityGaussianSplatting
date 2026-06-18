@@ -335,6 +335,7 @@ namespace GaussianSplatting.Runtime
             public static readonly int ExtColor = Shader.PropertyToID("_ExtColor");
             public static readonly int ExtCov3d0 = Shader.PropertyToID("_ExtCov3d0");
             public static readonly int ExtCov3d1 = Shader.PropertyToID("_ExtCov3d1");
+            public static readonly int ExtSH = Shader.PropertyToID("_ExtSH");
         }
 
         [field: NonSerialized] public bool editModified { get; private set; }
@@ -352,6 +353,7 @@ namespace GaussianSplatting.Runtime
         public GraphicsBuffer ExternalColorBuffer { get; private set; }       // float4 per splat (stride 16)
         public GraphicsBuffer ExternalCovarianceBuffer0 { get; private set; } // float3 per splat: xx, xy, xz
         public GraphicsBuffer ExternalCovarianceBuffer1 { get; private set; } // float3 per splat: yy, yz, zz
+        public GraphicsBuffer ExternalSphericalHarmonicsBuffer { get; private set; } // 15 float3 values per splat (stride 12)
         public int ExternalSplatCount { get; private set; }
 
         public bool HasExternalBuffers =>
@@ -359,6 +361,7 @@ namespace GaussianSplatting.Runtime
             ExternalColorBuffer != null &&
             ExternalCovarianceBuffer0 != null &&
             ExternalCovarianceBuffer1 != null &&
+            ExternalSphericalHarmonicsBuffer != null &&
             ExternalSplatCount > 0;
 
         enum KernelIndices
@@ -473,12 +476,13 @@ namespace GaussianSplatting.Runtime
             CreateViewIndexAndSortBuffers(m_SplatCount);
         }
 
-        public void SetExternalBuffers(GraphicsBuffer posBuffer, GraphicsBuffer colorBuffer, GraphicsBuffer covBuffer0, GraphicsBuffer covBuffer1, int splatCount)
+        public void SetExternalBuffers(GraphicsBuffer posBuffer, GraphicsBuffer colorBuffer, GraphicsBuffer covBuffer0, GraphicsBuffer covBuffer1, GraphicsBuffer sphericalHarmonicsBuffer, int splatCount)
         {
             Debug.Assert(posBuffer != null && posBuffer.stride == 12, "External position buffer must be float3 (stride 12)");
             Debug.Assert(colorBuffer != null && colorBuffer.stride == 16, "External color buffer must be float4 (stride 16)");
             Debug.Assert(covBuffer0 != null && covBuffer0.stride == 12, "External covariance buffer 0 must be float3 (stride 12)");
             Debug.Assert(covBuffer1 != null && covBuffer1.stride == 12, "External covariance buffer 1 must be float3 (stride 12)");
+            Debug.Assert(sphericalHarmonicsBuffer != null && sphericalHarmonicsBuffer.stride == 12, "External SH buffer must be 15 float3 per splat (stride 12)");
 
             // Only the buffer *contents* usually change between frames; reuse existing GPU
             // resources unless the buffers themselves or the splat count actually changed,
@@ -488,12 +492,14 @@ namespace GaussianSplatting.Runtime
                 ExternalColorBuffer == colorBuffer &&
                 ExternalCovarianceBuffer0 == covBuffer0 &&
                 ExternalCovarianceBuffer1 == covBuffer1 &&
+                ExternalSphericalHarmonicsBuffer == sphericalHarmonicsBuffer &&
                 ExternalSplatCount == splatCount;
 
             ExternalPositionBuffer = posBuffer;
             ExternalColorBuffer = colorBuffer;
             ExternalCovarianceBuffer0 = covBuffer0;
             ExternalCovarianceBuffer1 = covBuffer1;
+            ExternalSphericalHarmonicsBuffer = sphericalHarmonicsBuffer;
             ExternalSplatCount = splatCount;
 
             if (m_Registered && !unchanged)
@@ -592,6 +598,7 @@ namespace GaussianSplatting.Runtime
                 cmb.SetComputeBufferParam(cs, kernelIndex, Props.ExtColor, ExternalColorBuffer);
                 cmb.SetComputeBufferParam(cs, kernelIndex, Props.ExtCov3d0, ExternalCovarianceBuffer0);
                 cmb.SetComputeBufferParam(cs, kernelIndex, Props.ExtCov3d1, ExternalCovarianceBuffer1);
+                cmb.SetComputeBufferParam(cs, kernelIndex, Props.ExtSH, ExternalSphericalHarmonicsBuffer);
             }
             else
             {

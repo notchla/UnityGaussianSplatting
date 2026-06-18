@@ -809,8 +809,14 @@ void CSCalcViewDataExternal (uint3 id : SV_DispatchThreadID)
 
         DecomposeCovariance(cov2d, view.axis1, view.axis2);
 
+        float3 worldViewDir = _VecWorldSpaceCameraPos.xyz - centerWorldPos;
+        float3 objViewDir = mul((float3x3)_MatrixWorldToObject, worldViewDir);
+        objViewDir = normalize(objViewDir);
+
+        SplatSHData sh = LoadExternalSH(idx, col.rgb);
+
         half4 c;
-        c.rgb = col.rgb;
+        c.rgb = ShadeSH(sh, objViewDir, _SHOrder, _SHOnly != 0);
         c.a = min(col.a * opacityScale, 65000);
         view.color.x = (f32tof16(c.r) << 16) | f32tof16(c.g);
         view.color.y = (f32tof16(c.b) << 16) | f32tof16(c.a);
